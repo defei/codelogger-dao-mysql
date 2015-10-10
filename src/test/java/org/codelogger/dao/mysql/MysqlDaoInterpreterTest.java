@@ -68,9 +68,22 @@ public class MysqlDaoInterpreterTest {
   @Test
   public void test() {
 
-    Long count = userDao.count();
-    println(count);
-    List<User> users = userDao.findAll();
-    println(users);
+    println(userDao.count());
+    println(userDao.findAll());
+    println(userDao.findOne(1L));
+    userDao.delete(5L);
+    User user = new User();
+    user.setId(4L);
+    userDao.delete(user);
+    println(userDao.count());
+    User testUser = userDao.findOne(3L);
+    testUser.setName("TestUser" + System.currentTimeMillis());
+    userDao.save(testUser);
+    println(userDao.findAll());
+    User newUser = new User();
+    newUser.setName("New User");
+    newUser.setEmail(System.currentTimeMillis() + "@codelogger.org");
+    newUser = userDao.save(newUser);
+    println(newUser);
   }
 }
