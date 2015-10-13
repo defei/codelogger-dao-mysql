@@ -11,8 +11,6 @@ public interface MysqlDao<E, I extends Serializable> {
 
   E save(E e);
 
-  void delete(E e);
-
   void delete(I id);
 
   Long count();

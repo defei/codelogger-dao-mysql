@@ -1,30 +1,45 @@
 package org.codelogger.dao.mysql;
 
 import static com.google.common.collect.Lists.newArrayList;
+import static com.google.common.collect.Maps.newHashMap;
+import static com.google.common.collect.Maps.newLinkedHashMap;
 import static java.lang.String.format;
+import static org.codelogger.utils.ArrayUtils.isArray;
+import static org.codelogger.utils.CollectionUtils.isCollection;
 import static org.codelogger.utils.CollectionUtils.join;
 import static org.codelogger.utils.StringUtils.isBlank;
 import static org.codelogger.utils.StringUtils.isNotBlank;
 
 import java.io.Serializable;
+import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
+import java.util.regex.Pattern;
 
 import org.codelogger.dao.MysqlDao;
 import org.codelogger.dao.exception.DataAccessException;
+import org.codelogger.dao.exception.MethodUnsupportException;
 import org.codelogger.dao.exception.MysqlSqlException;
 import org.codelogger.dao.stereotype.Column;
 import org.codelogger.dao.stereotype.Entity;
 import org.codelogger.dao.stereotype.Id;
+import org.codelogger.dao.stereotype.Param;
+import org.codelogger.dao.stereotype.Query;
 import org.codelogger.utils.ArrayUtils;
+import org.codelogger.utils.CollectionUtils;
+import org.codelogger.utils.StringUtils;
 
 public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<E, I> {
 
@@ -32,6 +47,7 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
   public MysqlDaoInterpreter(final Properties settings, final Class<?> daoClass) {
 
     dataSourcePool = new DataSourcePool(settings);
+
     Type genericInterface = daoClass.getGenericInterfaces()[0];
     String[] typeNames = genericInterface.getTypeName().split(",");
     try {
@@ -46,6 +62,7 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
         Iterator<Field> iterator = entityFields.iterator();
         while (iterator.hasNext()) {
           Field field = iterator.next();
+          fieldNameToField.put(StringUtils.firstCharToUpperCase(field.getName()), field);
           if (Modifier.isFinal(field.getModifiers()) || Modifier.isTransient(field.getModifiers())
             || Modifier.isStatic(field.getModifiers())) {
             iterator.remove();
@@ -77,6 +94,13 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
       deleteSql = format("delete from %s where %s = %%s", tableName, idName);
       lockTableSql = format("lock table %s write", tableName);
       unlockTableSql = "unlock tables";
+      Method[] declaredMethods = daoClass.getDeclaredMethods();
+      if (ArrayUtils.isNotEmpty(declaredMethods)) {
+        for (Method method : declaredMethods) {
+          System.out.println(method.getName());
+          methodNameToMethod.put(method.getName(), method);
+        }
+      }
     } catch (ClassNotFoundException e) {
       e.printStackTrace();
     }
@@ -85,96 +109,15 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
   @Override
   public E findOne(final I id) {
 
-    E result = null;
-    Connection connection = dataSourcePool.getConnection();
-    try {
-      Statement statement = connection.createStatement();
-      String sql = "select * from " + tableName + " where " + idName + " = " + coverToSqlValue(id);
-      ResultSet resultSet = statement.executeQuery(sql);
-      try {
-        while (resultSet.next()) {
-          result = entityClass.newInstance();
-          for (Field field : entityFields) {
-            Object value = null;
-            Type genericType = field.getGenericType();
-            String fieldName = field.getName();
-            if (genericType == Integer.class || genericType == int.class) {
-              value = resultSet.getInt(fieldName);
-            } else if (genericType == Long.class || genericType == long.class) {
-              value = resultSet.getLong(fieldName);
-            } else if (genericType == String.class) {
-              value = resultSet.getString(fieldName);
-            } else if (genericType == Boolean.class || genericType == boolean.class) {
-              value = resultSet.getBoolean(fieldName);
-            } else if (genericType == Byte.class || genericType == byte.class) {
-              value = resultSet.getByte(fieldName);
-            } else if (genericType == Short.class || genericType == short.class) {
-              value = resultSet.getShort(fieldName);
-            }
-            if (value != null) {
-              field.set(result, value);
-            }
-          }
-        }
-        resultSet.close();
-      } catch (Exception e) {
-        throw new DataAccessException(e);
-      }
-      statement.close();
-    } catch (SQLException e) {
-      throw new MysqlSqlException(e);
-    }
-    dataSourcePool.freeConnection(connection);
-    return result;
+    String sql = "select * from " + tableName + " where " + idName + " = " + coverToSqlValue(id);
+    return findOne(sql);
   }
 
   @Override
   public List<E> findAll() {
 
-    List<E> elements = newArrayList();
-    Connection connection = dataSourcePool.getConnection();
-    try {
-      Statement statement = connection.createStatement();
-      ResultSet resultSet = statement.executeQuery("select * from " + tableName);
-      try {
-        while (resultSet.next()) {
-          E element = entityClass.newInstance();
-          for (Field field : entityFields) {
-            if (Modifier.isFinal(field.getModifiers())) {
-              continue;
-            }
-            Object value = null;
-            Type genericType = field.getGenericType();
-            String fieldName = field.getName();
-            if (genericType == Integer.class || genericType == int.class) {
-              value = resultSet.getInt(fieldName);
-            } else if (genericType == Long.class || genericType == long.class) {
-              value = resultSet.getLong(fieldName);
-            } else if (genericType == String.class) {
-              value = resultSet.getString(fieldName);
-            } else if (genericType == Boolean.class || genericType == boolean.class) {
-              value = resultSet.getBoolean(fieldName);
-            } else if (genericType == Byte.class || genericType == byte.class) {
-              value = resultSet.getByte(fieldName);
-            } else if (genericType == Short.class || genericType == short.class) {
-              value = resultSet.getShort(fieldName);
-            }
-            if (value != null) {
-              field.set(element, value);
-            }
-          }
-          elements.add(element);
-        }
-        resultSet.close();
-      } catch (Exception e) {
-        throw new DataAccessException(e);
-      }
-      statement.close();
-    } catch (SQLException e) {
-      throw new MysqlSqlException(e);
-    }
-    dataSourcePool.freeConnection(connection);
-    return elements;
+    String sql = "select * from " + tableName;
+    return findAll(sql);
   }
 
   @Override
@@ -215,22 +158,6 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
     return entity;
   }
 
-  @SuppressWarnings("unchecked")
-  @Override
-  public void delete(final E e) {
-
-    for (Field field : entityFields) {
-      Id id = field.getAnnotation(Id.class);
-      if (id != null) {
-        try {
-          delete((I) field.get(e));
-        } catch (Exception e1) {
-          e1.printStackTrace();
-        }
-      }
-    }
-  }
-
   @Override
   public void delete(final I id) {
 
@@ -261,6 +188,164 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
     return count;
   }
 
+  @SuppressWarnings("unchecked")
+  public Object executeByMethod(final Method method, final Object... args) {
+
+    if (method.equals(countMethod)) {
+      return count();
+    }
+    if (method.equals(deleteMethod)) {
+      delete((I) args[0]);
+      return null;
+    }
+    if (method.equals(saveMethod)) {
+      return save((E) args[0]);
+    }
+    if (method.equals(findAllMethod)) {
+      return findAll();
+    }
+    if (method.equals(findOneMethod)) {
+      return findOne((I) args[0]);
+    }
+
+    Query query = method.getAnnotation(Query.class);
+    if (query == null) {
+      if (method.getName().startsWith("findBy")) {
+        StringBuilder sqlBuilder = new StringBuilder("select * from " + tableName + " where ");
+        String conditions = method.getName().replaceFirst("findBy", "");
+        String[] fieldNames = conditions.split("And");
+        for (int i = 0; i < fieldNames.length; i++) {
+          Field field = fieldNameToField.get(fieldNames[i]);
+          sqlBuilder.append(field.getName()).append("=");
+          sqlBuilder.append(coverToSqlValue(args[i]));
+        }
+        if (Collection.class.isAssignableFrom(method.getReturnType())) {
+          return findAll(sqlBuilder.toString());
+        } else {
+          return findOne(sqlBuilder.toString());
+        }
+      }
+      throw new MethodUnsupportException(method.toString());
+    } else {
+      String querySql = query.value().trim();
+      Annotation[][] parameterAnnotations = method.getParameterAnnotations();
+      for (int i = 0; i < parameterAnnotations.length; i++) {
+        Annotation[] annotations = parameterAnnotations[i];
+        Param param = null;
+        for (Annotation annotation : annotations) {
+          if (annotation instanceof Param) {
+            param = (Param) annotation;
+            break;
+          }
+        }
+        querySql = querySql.replaceFirst(":" + param.value(), coverToSqlValue(args[i]));
+      }
+      querySql = querySql.replaceFirst(entityClass.getName(), tableName);
+      querySql = querySql.replaceFirst(
+        ArrayUtils.getLastElement(entityClass.getName().split("\\.")), tableName);
+      if (isSelectQuery(querySql)) {
+        querySql = simpleSelectQueryPattern.matcher(querySql).matches() ? "select * " + querySql
+          : querySql;
+        if (Collection.class.isAssignableFrom(method.getReturnType())) {
+          return findAll(querySql);
+        } else {
+          return findOne(querySql);
+        }
+      } else if (updateQueryPattern.matcher(querySql).matches()
+        || deleteQueryPattern.matcher(querySql).matches()) {
+        executeQuery(querySql);
+        return null;
+      }
+      throw new MethodUnsupportException(method.toString());
+    }
+  }
+
+  private Boolean isSelectQuery(final String querySql) {
+
+    for (Pattern pattern : selectQueryPatterns) {
+      if (pattern.matcher(querySql).matches()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private void executeQuery(final String query) {
+
+    Connection connection = dataSourcePool.getConnection();
+    try {
+      Statement statement = connection.createStatement();
+      System.out.println(query);
+      statement.execute(query);
+    } catch (SQLException e) {
+      throw new MysqlSqlException(e);
+    }
+    dataSourcePool.freeConnection(connection);
+  }
+
+  private List<E> findAll(final String sql) {
+
+    List<E> elements = newArrayList();
+    Connection connection = dataSourcePool.getConnection();
+    try {
+      Statement statement = connection.createStatement();
+      System.out.println(sql);
+      ResultSet resultSet = statement.executeQuery(sql);
+      try {
+        while (resultSet.next()) {
+          E element = entityClass.newInstance();
+          for (Field field : entityFields) {
+            if (Modifier.isFinal(field.getModifiers())) {
+              continue;
+            }
+            Object value = getDataFromResultSetByField(resultSet, field);
+            if (value != null) {
+              field.set(element, value);
+            }
+          }
+          elements.add(element);
+        }
+        resultSet.close();
+      } catch (Exception e) {
+        throw new DataAccessException(e);
+      }
+      statement.close();
+    } catch (SQLException e) {
+      throw new MysqlSqlException(e);
+    }
+    dataSourcePool.freeConnection(connection);
+    return elements;
+  }
+
+  private E findOne(final String sql) {
+
+    E result = null;
+    Connection connection = dataSourcePool.getConnection();
+    try {
+      Statement statement = connection.createStatement();
+      ResultSet resultSet = statement.executeQuery(sql);
+      try {
+        while (resultSet.next()) {
+          result = entityClass.newInstance();
+          for (Field field : entityFields) {
+            Object value = getDataFromResultSetByField(resultSet, field);
+            if (value != null) {
+              field.set(result, value);
+            }
+          }
+        }
+        resultSet.close();
+      } catch (Exception e) {
+        throw new DataAccessException(e);
+      }
+      statement.close();
+    } catch (SQLException e) {
+      throw new MysqlSqlException(e);
+    }
+    dataSourcePool.freeConnection(connection);
+    return result;
+  }
+
   private void lockTable(final Statement statement) throws SQLException {
 
     statement.execute(lockTableSql);
@@ -271,12 +356,43 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
     statement.execute(unlockTableSql);
   }
 
+  private Object getDataFromResultSetByField(final ResultSet resultSet, final Field field)
+    throws SQLException {
+
+    Object value = null;
+    Type genericType = field.getGenericType();
+    String fieldName = field.getName();
+    if (genericType == Integer.class || genericType == int.class) {
+      value = resultSet.getInt(fieldName);
+    } else if (genericType == Long.class || genericType == long.class) {
+      value = resultSet.getLong(fieldName);
+    } else if (genericType == String.class) {
+      value = resultSet.getString(fieldName);
+    } else if (genericType == Boolean.class || genericType == boolean.class) {
+      value = resultSet.getBoolean(fieldName);
+    } else if (genericType == Byte.class || genericType == byte.class) {
+      value = resultSet.getByte(fieldName);
+    } else if (genericType == Short.class || genericType == short.class) {
+      value = resultSet.getShort(fieldName);
+    }
+    return value;
+  }
+
   private String coverToSqlValue(final Object value) {
 
     if (value == null) {
       return "null";
     } else if (value instanceof String) {
       return format("'%s'", value);
+    } else if (isCollection(value) || isArray(value)) {
+      @SuppressWarnings("rawtypes")
+      Collection<?> values = isCollection(value) ? (Collection) value : ArrayUtils.toList(value,
+        Object.class);
+      List<String> coverdValues = new ArrayList<String>(values.size());
+      for (Object o : values) {
+        coverdValues.add(coverToSqlValue(o));
+      }
+      return CollectionUtils.join(coverdValues, ",");
     } else {
       return value.toString();
     }
@@ -324,5 +440,50 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
 
   private Class<I> idClass;
 
+  private Map<String, Field> fieldNameToField = newLinkedHashMap();
+
+  private Map<String, Method> methodNameToMethod = newHashMap();
+
   private DataSourcePool dataSourcePool;
+
+  private Pattern deleteQueryPattern = Pattern.compile("^delete.*", Pattern.CASE_INSENSITIVE);
+
+  private Pattern updateQueryPattern = Pattern.compile("^update.*", Pattern.CASE_INSENSITIVE);
+
+  private Pattern simpleSelectQueryPattern = Pattern.compile("^from.*", Pattern.CASE_INSENSITIVE);
+
+  private Pattern[] selectQueryPatterns = { Pattern.compile("^select.*", Pattern.CASE_INSENSITIVE),
+      simpleSelectQueryPattern };
+
+  static {
+    Method[] mysqlDaoMethods = MysqlDao.class.getDeclaredMethods();
+    for (Method method : mysqlDaoMethods) {
+      if (method.getName().equals("count")) {
+        countMethod = method;
+      }
+      if (method.getName().equals("delete")) {
+        deleteMethod = method;
+      }
+      if (method.getName().equals("save")) {
+        saveMethod = method;
+      }
+      if (method.getName().equals("findAll")) {
+        findAllMethod = method;
+      }
+      if (method.getName().equals("findOne")) {
+        findOneMethod = method;
+      }
+    }
+  }
+
+  private static Method findOneMethod;
+
+  private static Method findAllMethod;
+
+  private static Method saveMethod;
+
+  private static Method deleteMethod;
+
+  private static Method countMethod;
+
 }
