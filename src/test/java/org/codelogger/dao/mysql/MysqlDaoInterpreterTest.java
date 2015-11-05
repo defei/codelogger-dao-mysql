@@ -6,12 +6,10 @@ import static org.codelogger.utils.PrintUtils.println;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.UnsupportedEncodingException;
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Properties;
 
+import org.codelogger.dao.MysqlDaoConstructFactory;
 import org.codelogger.dao.test.dao.UserDao;
 import org.codelogger.dao.test.domain.User;
 import org.junit.Before;
@@ -22,25 +20,13 @@ public class MysqlDaoInterpreterTest {
   private UserDao userDao;
 
   @Before
-  public void setup() throws UnsupportedEncodingException, IOException {
+  public void setup() throws UnsupportedEncodingException, IOException, InstantiationException,
+    IllegalAccessException {
 
     Properties conf = new Properties();
     conf.load(new InputStreamReader(MysqlDaoInterpreterTest.class
       .getResourceAsStream("/codelogger-dao.config"), "utf-8"));
-    final MysqlDaoInterpreter<User, Long> mysqlDaoInterpreter = new MysqlDaoInterpreter<User, Long>(
-      conf, UserDao.class);
-    InvocationHandler invocationHandler = new InvocationHandler() {
-
-      @Override
-      public Object invoke(final Object proxy, final Method method, final Object[] args)
-        throws Throwable {
-
-        return mysqlDaoInterpreter.executeByMethod(method, args);
-      }
-
-    };
-    userDao = (UserDao) Proxy.newProxyInstance(this.getClass().getClassLoader(),
-      new Class[] { UserDao.class }, invocationHandler);
+    userDao = new MysqlDaoConstructFactory(conf).newInstance(UserDao.class);
   }
 
   @Test
