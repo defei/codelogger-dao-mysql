@@ -28,6 +28,8 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
+import org.codelogger.core.bean.Page;
+import org.codelogger.core.bean.Pageable;
 import org.codelogger.dao.MysqlDao;
 import org.codelogger.dao.exception.DataAccessException;
 import org.codelogger.dao.exception.MethodUnsupportException;
@@ -121,6 +123,16 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
   }
 
   @Override
+  public Page<E> findAll(final Pageable pageable) {
+
+    String sql = "select * from " + tableName + buildLimitSql(pageable);
+    List<E> content = findAll(sql);
+    Long count = count();
+    return new Page<E>(pageable.page, pageable.pageSize, count, (int) (count / pageable.pageSize),
+      content);
+  }
+
+  @Override
   public E save(final E entity) {
 
     Object id = getFieldValue(idField, entity);
@@ -175,28 +187,14 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
   @Override
   public Long count() {
 
-    Long count = 0L;
-    Connection connection = dataSourcePool.getConnection();
-    try {
-      Statement statement = connection.createStatement();
-      ResultSet resultSet = statement.executeQuery(countSql);
-      count = resultSet.next() ? resultSet.getLong(1) : 0;
-    } catch (SQLException e) {
-      throw new MysqlSqlException(e);
-    }
-    dataSourcePool.freeConnection(connection);
-    return count;
+    return count(countSql);
   }
 
   @SuppressWarnings("unchecked")
   public Object executeByMethod(final Method method, final Object... args) {
 
-    if (method.equals(countMethod)) {
-      return count();
-    }
-    if (method.equals(deleteMethod)) {
-      delete((I) args[0]);
-      return null;
+    if (method.equals(findOneMethod)) {
+      return findOne((I) args[0]);
     }
     if (method.equals(saveMethod)) {
       return save((E) args[0]);
@@ -204,8 +202,15 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
     if (method.equals(findAllMethod)) {
       return findAll();
     }
-    if (method.equals(findOneMethod)) {
-      return findOne((I) args[0]);
+    if (method.equals(countMethod)) {
+      return count();
+    }
+    if (method.equals(deleteMethod)) {
+      delete((I) args[0]);
+      return null;
+    }
+    if (method.equals(pageableFindAllMethod)) {
+      return findAll((Pageable) args[0]);
     }
 
     Query query = method.getAnnotation(Query.class);
@@ -219,10 +224,25 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
           sqlBuilder.append(field.getName()).append("=");
           sqlBuilder.append(coverToSqlValue(args[i]));
         }
+        String sql = sqlBuilder.toString();
         if (Collection.class.isAssignableFrom(method.getReturnType())) {
-          return findAll(sqlBuilder.toString());
+          return findAll(sql);
+        } else if (Page.class.isAssignableFrom(method.getReturnType())) {
+          Object lastArgument = ArrayUtils.getLastElement(args);
+          Pageable pageable = null;
+          Long count;
+          if (lastArgument instanceof Pageable) {
+            count = count(sql.replace("select *", "select count(*)"));
+            pageable = (Pageable) lastArgument;
+            sql += buildLimitSql(pageable);
+          } else {
+            throw new IllegalArgumentException("Pageable is not the latest argument.");
+          }
+          List<E> content = findAll(sql);
+          return new Page<E>(pageable.page, pageable.pageSize, count,
+            (int) (count / pageable.pageSize), content);
         } else {
-          return findOne(sqlBuilder.toString());
+          return findOne(sql);
         }
       }
       throw new MethodUnsupportException(method.toString());
@@ -248,6 +268,20 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
           : querySql;
         if (Collection.class.isAssignableFrom(method.getReturnType())) {
           return findAll(querySql);
+        } else if (Page.class.isAssignableFrom(method.getReturnType())) {
+          Object lastArgument = ArrayUtils.getLastElement(args);
+          Pageable pageable = null;
+          Long count;
+          if (lastArgument instanceof Pageable) {
+            count = count(querySql.replace("select *", "select count(*)"));
+            pageable = (Pageable) lastArgument;
+            querySql += buildLimitSql(pageable);
+          } else {
+            throw new IllegalArgumentException("Pageable is not the latest argument.");
+          }
+          List<E> content = findAll(querySql);
+          return new Page<E>(pageable.page, pageable.pageSize, count,
+            (int) (count / pageable.pageSize), content);
         } else {
           return findOne(querySql);
         }
@@ -258,6 +292,21 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
       }
       throw new MethodUnsupportException(method.toString());
     }
+  }
+
+  private Long count(final String countSql) {
+
+    Long count = 0L;
+    Connection connection = dataSourcePool.getConnection();
+    try {
+      Statement statement = connection.createStatement();
+      ResultSet resultSet = statement.executeQuery(countSql);
+      count = resultSet.next() ? resultSet.getLong(1) : 0;
+    } catch (SQLException e) {
+      throw new MysqlSqlException(e);
+    }
+    dataSourcePool.freeConnection(connection);
+    return count;
   }
 
   private Boolean isSelectQuery(final String querySql) {
@@ -346,6 +395,16 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
     return result;
   }
 
+  private String buildLimitSql(final Pageable pageable) {
+
+    if (pageable == null) {
+      return "";
+    } else {
+      Integer from = pageable.page * pageable.pageSize;
+      return " limit " + from + "," + pageable.pageSize;
+    }
+  }
+
   private void lockTable(final Statement statement) throws SQLException {
 
     statement.execute(lockTableSql);
@@ -361,7 +420,9 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
 
     Object value = null;
     Type genericType = field.getGenericType();
-    String fieldName = field.getName();
+    Column column = field.getAnnotation(Column.class);
+    String fieldName = column == null ? field.getName()
+      : StringUtils.isBlank(column.name()) ? field.getName() : column.name();
     if (genericType == Integer.class || genericType == int.class) {
       value = resultSet.getInt(fieldName);
     } else if (genericType == Long.class || genericType == long.class) {
@@ -467,8 +528,12 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
       if (method.getName().equals("save")) {
         saveMethod = method;
       }
-      if (method.getName().equals("findAll")) {
+      if (method.getName().equals("findAll") && method.getParameterCount() == 0) {
         findAllMethod = method;
+      }
+      if (method.getName().equals("findAll") && method.getParameterCount() == 1
+        && method.getParameterTypes()[0].equals(Pageable.class)) {
+        pageableFindAllMethod = method;
       }
       if (method.getName().equals("findOne")) {
         findOneMethod = method;
@@ -479,6 +544,8 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
   private static Method findOneMethod;
 
   private static Method findAllMethod;
+
+  private static Method pageableFindAllMethod;
 
   private static Method saveMethod;
 
