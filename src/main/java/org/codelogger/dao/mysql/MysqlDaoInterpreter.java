@@ -8,7 +8,6 @@ import static org.codelogger.utils.ArrayUtils.isArray;
 import static org.codelogger.utils.CollectionUtils.isCollection;
 import static org.codelogger.utils.CollectionUtils.join;
 import static org.codelogger.utils.StringUtils.isBlank;
-import static org.codelogger.utils.StringUtils.isNotBlank;
 
 import java.io.Serializable;
 import java.lang.annotation.Annotation;
@@ -64,6 +63,7 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
         Iterator<Field> iterator = entityFields.iterator();
         while (iterator.hasNext()) {
           Field field = iterator.next();
+          fieldNameToField.put(field.getName(), field);
           fieldNameToField.put(StringUtils.firstCharToUpperCase(field.getName()), field);
           if (Modifier.isFinal(field.getModifiers()) || Modifier.isTransient(field.getModifiers())
             || Modifier.isStatic(field.getModifiers())) {
@@ -71,15 +71,12 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
           }
           field.setAccessible(true);
           Id id = field.getAnnotation(Id.class);
-          Column column = field.getAnnotation(Column.class);
           String fieldName = field.getName();
-          String columnName = fieldName;
+          String columnName = getFieldColumnName(field);
           if (id != null) {
-            idName = isBlank(id.name()) ? fieldName : id.name();
+            idName = isBlank(id.name()) ? columnName : id.name();
             idField = field;
             columnName = idName;
-          } else if (column != null && isNotBlank(column.name())) {
-            columnName = column.name();
           }
           columnNames.add(columnName);
           columnValuePlaceholders.add(":" + fieldName);
@@ -221,7 +218,7 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
         String[] fieldNames = conditions.split("And");
         for (int i = 0; i < fieldNames.length; i++) {
           Field field = fieldNameToField.get(fieldNames[i]);
-          sqlBuilder.append(field.getName()).append("=");
+          sqlBuilder.append(getFieldColumnName(field)).append("=");
           sqlBuilder.append(coverToSqlValue(args[i]));
         }
         String sql = sqlBuilder.toString();
@@ -400,8 +397,20 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
     if (pageable == null) {
       return "";
     } else {
+      String orderBySql = null;
+      if (pageable.direction != null && ArrayUtils.isNotEmpty(pageable.fields)) {
+        StringBuilder orderBySqlBuilder = new StringBuilder(" ORDER BY ");
+        for (String fieldName : pageable.fields) {
+          Field field = fieldNameToField.get(fieldName);
+          String columnName = getFieldColumnName(field);
+          orderBySqlBuilder.append(columnName);
+          orderBySqlBuilder.append(" ").append(pageable.direction.name()).append(",");
+        }
+        orderBySql = orderBySqlBuilder.substring(0, orderBySqlBuilder.length() - 1);
+      }
       Integer from = pageable.page * pageable.pageSize;
-      return " limit " + from + "," + pageable.pageSize;
+      String limitSql = " limit " + from + "," + pageable.pageSize;
+      return orderBySql == null ? limitSql : orderBySql + limitSql;
     }
   }
 
@@ -420,9 +429,7 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
 
     Object value = null;
     Type genericType = field.getGenericType();
-    Column column = field.getAnnotation(Column.class);
-    String fieldName = column == null ? field.getName()
-      : StringUtils.isBlank(column.name()) ? field.getName() : column.name();
+    String fieldName = getFieldColumnName(field);
     if (genericType == Integer.class || genericType == int.class) {
       value = resultSet.getInt(fieldName);
     } else if (genericType == Long.class || genericType == long.class) {
@@ -437,6 +444,13 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
       value = resultSet.getShort(fieldName);
     }
     return value;
+  }
+
+  private String getFieldColumnName(final Field field) {
+
+    Column column = field.getAnnotation(Column.class);
+    return column == null ? field.getName() : StringUtils.isBlank(column.name()) ? field.getName()
+      : column.name();
   }
 
   private String coverToSqlValue(final Object value) {
