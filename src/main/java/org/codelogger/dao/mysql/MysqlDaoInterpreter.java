@@ -545,8 +545,7 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
       if (method.getName().equals("findAll") && ArrayUtils.count(method.getParameterTypes()) == 0) {
         findAllMethod = method;
       }
-      if (method.getName().equals("findAll") && method.getParameterTypes() != null
-        && method.getParameterTypes().length == 1
+      if (method.getName().equals("findAll") && ArrayUtils.count(method.getParameterTypes()) == 1
         && method.getParameterTypes()[0].equals(Pageable.class)) {
         pageableFindAllMethod = method;
       }
