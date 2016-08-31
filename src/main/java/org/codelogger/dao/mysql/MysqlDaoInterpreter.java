@@ -50,7 +50,7 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
     dataSourcePool = new DataSourcePool(settings);
 
     Type genericInterface = daoClass.getGenericInterfaces()[0];
-    String[] typeNames = genericInterface.getTypeName().split(",");
+    String[] typeNames = genericInterface.toString().split(",");
     try {
       entityClass = (Class<E>) Class.forName(typeNames[0].substring(typeNames[0].indexOf("<") + 1));
       tableName = entityClass.getAnnotation(Entity.class).tableName();
@@ -542,10 +542,11 @@ public class MysqlDaoInterpreter<E, I extends Serializable> implements MysqlDao<
       if (method.getName().equals("save")) {
         saveMethod = method;
       }
-      if (method.getName().equals("findAll") && method.getParameterCount() == 0) {
+      if (method.getName().equals("findAll") && ArrayUtils.count(method.getParameterTypes()) == 0) {
         findAllMethod = method;
       }
-      if (method.getName().equals("findAll") && method.getParameterCount() == 1
+      if (method.getName().equals("findAll") && method.getParameterTypes() != null
+        && method.getParameterTypes().length == 1
         && method.getParameterTypes()[0].equals(Pageable.class)) {
         pageableFindAllMethod = method;
       }
