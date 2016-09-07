@@ -53,7 +53,7 @@ public class DataSourcePool {
       public void run() {
 
         int totalConnection = connections.size();
-        logger.debug("Test total[{}] connections if enable.", totalConnection);
+        logger.trace("Test total[{}] connections if enable.", totalConnection);
         for (int i = 0; i < totalConnection; i++) {
           Connection connection = connections.poll();
           if (connection != null) {
@@ -128,7 +128,6 @@ public class DataSourcePool {
           logger.info("Close connection[{}] failed.", connection, e);
         }
       }
-
     }
 
   }
@@ -163,7 +162,7 @@ public class DataSourcePool {
       @Override
       public void run() {
 
-        logger.debug("Check total[{}] DataSourcePool connections idle status .",
+        logger.trace("Check total[{}] DataSourcePool connections idle status .",
           dataSourcePools.size());
 
         for (Map.Entry<DataSourcePool, Long> connectionAndConstructTime : dataSourcePools
